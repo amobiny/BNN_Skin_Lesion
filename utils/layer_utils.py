@@ -1,4 +1,7 @@
 import tensorflow as tf
+from tensorflow.contrib.framework import arg_scope
+from tensorflow.contrib.layers import batch_norm, flatten
+from tflearn.layers.conv import global_avg_pool
 
 
 def get_num_channels(x):
@@ -17,34 +20,21 @@ def bias_variable(name, shape):
                            initializer=initial)
 
 
-def conv_2d(inputs, filter_size, num_filters, name, stride=1, add_reg=True, add_relu=True, keep_prob=None):
-    num_in_channel = get_num_channels(inputs)
-    with tf.variable_scope(name):
-        shape = [filter_size, filter_size, num_in_channel, num_filters]
-        weights = weight_variable(name, shape=shape)
-        weights = tf.reshape(drop_connect(weights, keep_prob), shape=shape)
-        layer = tf.nn.conv2d(input=inputs,
+def conv_layer(x, num_filters, kernel_size, add_reg=False, stride=1, layer_name="conv"):
+    with tf.variable_scope(layer_name):
+        num_in_channel = get_num_channels(x)
+        shape = [kernel_size, kernel_size, num_in_channel, num_filters]
+        weights = weight_variable(layer_name, shape=shape)
+        layer = tf.nn.conv2d(input=x,
                              filter=weights,
                              strides=[1, stride, stride, 1],
                              padding="SAME")
-        print('{}: {}'.format(name, layer.get_shape()))
-        biases = bias_variable(name, [num_filters])
+        print('{}: {}'.format(layer_name, layer.get_shape()))
+        biases = bias_variable(layer_name, [num_filters])
         layer += biases
-        if add_relu:
-            layer = tf.nn.relu(layer)
         if add_reg:
             tf.add_to_collection('weights', weights)
-    return layer
-
-
-def max_pool(x, ksize, stride, name):
-    maxpool = tf.nn.max_pool(x,
-                             ksize=[1, ksize, ksize, 1],
-                             strides=[1, stride, stride, 1],
-                             padding="SAME",
-                             name=name)
-    print('{}: {}'.format(name, maxpool.get_shape()))
-    return maxpool
+        return layer
 
 
 def flatten_layer(layer):
@@ -55,19 +45,26 @@ def flatten_layer(layer):
     return layer_flat
 
 
-def fc_layer(bottom, out_dim, name, add_reg=True, use_relu=True):
-    in_dim = bottom.get_shape()[1]
-    with tf.variable_scope(name):
-        weights = weight_variable(name, shape=[in_dim, out_dim])
+def fc_layer(x, num_units, add_reg, layer_name):
+    in_dim = x.get_shape()[1]
+    with tf.variable_scope(layer_name):
+        weights = weight_variable(layer_name, shape=[in_dim, num_units])
         tf.summary.histogram('W', weights)
-        biases = bias_variable(name, [out_dim])
-        layer = tf.matmul(bottom, weights)
+        biases = bias_variable(layer_name, [num_units])
+        layer = tf.matmul(x, weights)
         layer += biases
-        if use_relu:
-            layer = tf.nn.relu(layer)
         if add_reg:
             tf.add_to_collection('weights', weights)
-    return layer
+        print('{}: {}'.format(layer_name, layer.get_shape()))
+        return layer
+
+
+def max_pool(x, pool_size, stride, name, padding='VALID'):
+    """Create a max pooling layer."""
+    net = tf.layers.max_pooling2d(inputs=x, pool_size=pool_size, strides=stride,
+                                  padding=padding, name=name)
+    print('{}: {}'.format(name, net.get_shape()))
+    return net
 
 
 def drop_out(x, keep_prob):
@@ -76,3 +73,46 @@ def drop_out(x, keep_prob):
 
 def drop_connect(w, keep_prob):
     return tf.nn.dropout(w, keep_prob=keep_prob) * keep_prob
+
+
+def average_pool(x, pool_size, stride, name, padding='VALID'):
+    """Create an average pooling layer."""
+    net = tf.layers.average_pooling2d(inputs=x, pool_size=pool_size, strides=stride,
+                                      padding=padding, name=name)
+    print('{}: {}'.format(name, net.get_shape()))
+    return net
+
+
+def global_average_pool(x, name='global_avg_pooling'):
+    """
+    width = np.shape(x)[1]
+    height = np.shape(x)[2]
+    pool_size = [width, height]
+    return tf.layers.average_pooling2d(inputs=x, pool_size=pool_size, strides=stride)
+    """
+    net = global_avg_pool(x, name=name)
+    print('{}: {}'.format(name, net.get_shape()))
+    return net
+
+
+def batch_normalization(x, training, scope):
+    with arg_scope([batch_norm],
+                   scope=scope,
+                   updates_collections=None,
+                   decay=0.9,
+                   center=True,
+                   scale=True,
+                   zero_debias_moving_mean=True):
+        out = tf.cond(training,
+                      lambda: batch_norm(inputs=x, is_training=training, reuse=None),
+                      lambda: batch_norm(inputs=x, is_training=training, reuse=True))
+        return out
+
+
+def concatenation(layers):
+    return tf.concat(layers, axis=3)
+
+
+def relu(x):
+    return tf.nn.relu(x)
+

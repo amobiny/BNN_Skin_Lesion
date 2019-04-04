@@ -28,6 +28,4 @@ h5f.create_dataset('X_test', data=X_test)
 h5f.create_dataset('y_test', data=y_test)
 h5f.close()
 
-
-
 print()

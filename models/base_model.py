@@ -1,6 +1,8 @@
 import tensorflow as tf
 from tqdm import tqdm
-from utils.loss_utils import cross_entropy
+from utils.augmentation_utils import tf_aug
+from utils.eval_utils import save_confusion_matrix
+from utils.loss_utils import cross_entropy, weighted_cross_entropy
 import os
 import numpy as np
 
@@ -17,14 +19,21 @@ class BaseModel(object):
     def create_placeholders(self):
         with tf.name_scope('Input'):
             self.inputs_pl = tf.placeholder(tf.float32, self.input_shape, name='input')
-            self.labels_pl = tf.placeholder(tf.int64, self.output_shape, name='annotation')
+            self.labels_pl = tf.placeholder(tf.float32, self.output_shape, name='annotation')
             self.keep_prob_pl = tf.placeholder(tf.float32)
+            self.is_train_pl = tf.placeholder_with_default(True, shape=(), name="is_train")  # for augmentation
+            self.inputs_aug = tf.cond(self.is_train_pl,
+                                      lambda: tf.map_fn(lambda img: tf_aug(img), self.inputs_pl),
+                                      lambda: self.inputs_pl)
 
     def loss_func(self):
         with tf.name_scope('Loss'):
             self.y_prob = tf.nn.softmax(self.logits, axis=-1)
             with tf.name_scope('cross_entropy'):
-                loss = cross_entropy(self.labels_pl, self.logits)
+                if self.conf.weighted_loss:
+                    loss = weighted_cross_entropy(self.labels_pl, self.logits, self.conf.num_cls)
+                else:
+                    loss = cross_entropy(self.labels_pl, self.logits)
             with tf.name_scope('total'):
                 if self.conf.use_reg:
                     with tf.name_scope('L2_loss'):
@@ -37,8 +46,9 @@ class BaseModel(object):
 
     def accuracy_func(self):
         with tf.name_scope('Accuracy'):
+            self.y = tf.argmax(self.labels_pl, axis=1)
             self.y_pred = tf.argmax(self.logits, axis=1, name='y_pred')
-            correct_prediction = tf.equal(tf.argmax(self.labels_pl, axis=1), self.y_pred, name='correct_pred')
+            correct_prediction = tf.equal(self.y, self.y_pred, name='correct_pred')
             accuracy = tf.reduce_mean(tf.cast(correct_prediction, tf.float32), name='accuracy_op')
             self.mean_accuracy, self.mean_accuracy_op = tf.metrics.mean(accuracy)
 
@@ -95,13 +105,15 @@ class BaseModel(object):
             from DataLoaders.mnist_loader import DataLoader
         elif self.conf.data == 'cifar':
             from DataLoaders.cifar_loader import DataLoader
+        elif self.conf.data == 'skin':
+            from DataLoaders.skin_lesion_loader import DataLoader
         else:
             print('wrong data name')
         self.data_reader = DataLoader(self.conf)
         self.data_reader.get_data(mode='train')
         self.data_reader.get_data(mode='valid')
         self.num_train_batch = self.data_reader.count_num_batch(self.conf.batch_size, mode='train')
-        self.num_val_batch = self.data_reader.count_num_batch(self.conf.batch_size, mode='valid')
+        self.num_val_batch = self.data_reader.count_num_batch(self.conf.val_batch_size, mode='valid')
         for epoch in range(self.conf.max_epoch):
             self.data_reader.randomize()
             for train_step in range(self.num_train_batch):
@@ -117,7 +129,7 @@ class BaseModel(object):
                                                       self.merged_summary], feed_dict=feed_dict)
                     loss, acc = self.sess.run([self.mean_loss, self.mean_accuracy])
                     self.save_summary(summary, glob_step + self.conf.reload_step, mode='train')
-                    print('epoch {0}/{1}, step: {2:<6}, train_loss= {3:.4f}, train_acc={4:.01%}'.
+                    print('epoch {0}/{1}, step: {2:<6}, train_loss= {3:.4f}, train_acc={4:.02%}'.
                           format(epoch, self.conf.max_epoch, glob_step, loss, acc))
                 else:
                     self.sess.run([self.train_op, self.mean_loss_op, self.mean_accuracy_op], feed_dict=feed_dict)
@@ -132,6 +144,8 @@ class BaseModel(object):
             from DataLoaders.mnist_loader import DataLoader
         elif self.conf.data == 'cifar':
             from DataLoaders.cifar_loader import DataLoader
+        elif self.conf.data == 'skin':
+            from DataLoaders.skin_lesion_loader import DataLoader
         else:
             print('wrong data name')
 
@@ -163,19 +177,23 @@ class BaseModel(object):
     def evaluate(self, dataset='valid', train_step=None):
         num_batch = self.num_test_batch if dataset == 'test' else self.num_val_batch
         self.sess.run(tf.local_variables_initializer())
+        y_true, y_pred = np.zeros(num_batch*self.conf.val_batch_size), np.zeros(num_batch*self.conf.val_batch_size)
         for step in range(num_batch):
             start = self.conf.val_batch_size * step
             end = self.conf.val_batch_size * (step + 1)
             data_x, data_y = self.data_reader.next_batch(start=start, end=end, mode=dataset)
             feed_dict = {self.inputs_pl: data_x,
                          self.labels_pl: data_y,
-                         self.keep_prob_pl: 1}
-            self.sess.run([self.mean_loss_op, self.mean_accuracy_op], feed_dict=feed_dict)
+                         self.keep_prob_pl: 1,
+                         self.is_train_pl: False}
+            y_true[start:end], y_pred[start:end], _, _ = self.sess.run([self.y, self.y_pred,
+                                                                        self.mean_loss_op, self.mean_accuracy_op],
+                                                                       feed_dict=feed_dict)
 
         loss, acc = self.sess.run([self.mean_loss, self.mean_accuracy])
         if dataset == "valid":  # save the summaries and improved model in validation mode
             print('-' * 30)
-            print('valid_loss = {0:.4f}, val_acc = {1:.01%}'.format(loss, acc))
+            print('valid_loss = {0:.4f}, val_acc = {1:.02%}'.format(loss, acc))
             summary_valid = self.sess.run(self.merged_summary, feed_dict=feed_dict)
             self.save_summary(summary_valid, train_step, mode='valid')
             if loss < self.best_validation_loss:
@@ -191,6 +209,13 @@ class BaseModel(object):
                 print('>>>>>>>> model accuracy improved; saving the model......')
                 self.save(train_step)
             print('-' * 30)
+            fig_path = self.conf.imagedir + self.conf.run_name + '/' + str(train_step) + '.png'
+        else:
+            fig_path = self.conf.imagedir + self.conf.run_name + '/test_' + str(train_step) + '.png'
+        save_confusion_matrix(y_true.astype(int), y_pred.astype(int),
+                              classes=np.array(self.conf.label_name),
+                              dest_path=fig_path,
+                              title='Confusion matrix, without normalization')
 
     def MC_evaluate(self, dataset='valid', train_step=None):
         num_batch = self.num_test_batch if dataset == 'test' else self.num_val_batch
@@ -202,7 +227,8 @@ class BaseModel(object):
             data_x, data_y = self.data_reader.next_batch(start=start, end=end, mode=dataset)
             feed_dict = {self.inputs_pl: data_x,
                          self.labels_pl: data_y,
-                         self.keep_prob_pl: 1}
+                         self.keep_prob_pl: 1,
+                         self.is_train_pl: False}
             for sample_id in range(self.conf.monte_carlo_simulations):
                 # save predictions from a sample pass
                 y_pred[sample_id] = self.sess.run(y_prob, feed_dict=feed_dict)
@@ -214,11 +240,6 @@ class BaseModel(object):
             # compute batch error
             err += np.count_nonzero(np.not_equal(mean_pred[start:end].argmax(axis=1),
                                                  y_batch.argmax(axis=1)))
-
-
-
-
-
 
             mask_pred_mc = [np.zeros((self.conf.val_batch_size, self.conf.height, self.conf.width))
                             for _ in range(self.conf.monte_carlo_simulations)]

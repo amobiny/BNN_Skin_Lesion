@@ -12,10 +12,10 @@ num_samples = y.shape[0]
 new_img_height = 224
 new_img_width = 224
 
-print('Start re-sizing and normalizing the data ...')
+print('Start re-sizing the data ...')
 X_resized = np.zeros((num_samples, new_img_height, new_img_width, 3))
 for i, img in enumerate(X):
-    X_resized[i] = cv2.resize(img, (new_img_width, new_img_height), interpolation=cv2.INTER_LANCZOS4) / 255.
+    X_resized[i] = cv2.resize(img, (new_img_width, new_img_height), interpolation=cv2.INTER_LANCZOS4)
 
 # split train and test data
 print('Start splitting the data ...')

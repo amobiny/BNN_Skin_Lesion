@@ -19,6 +19,10 @@ class DataLoader(object):
             y_train = h5f['y_train'][:]
             h5f.close()
             self.y_train = self.one_hot(y_train)
+            # self.mean = np.mean(self.x_train, axis=(0, 1, 2))
+            # self.std = np.std(self.x_train, axis=(0, 1, 2))
+            # self.mean = [0.485, 0.456, 0.406]
+            # self.std = [0.229, 0.224, 0.225]
         elif mode == 'valid':
             print('Loading the validation data ...')
             h5f = h5py.File(self.data_dir, 'r')
@@ -48,7 +52,7 @@ class DataLoader(object):
         elif mode == 'test':
             x = self.x_test[start:end]
             y = self.y_test[start:end]
-        x /= 255.
+        # x = self.normalize(x)
         return x, y
 
     def count_num_batch(self, batch_size, mode='train'):
@@ -70,3 +74,13 @@ class DataLoader(object):
         y_ohe = np.zeros((y.size, int(y.max() + 1)))
         y_ohe[np.arange(y.size), y.astype(int)] = 1
         return y_ohe
+
+    def normalize(self, x):
+        x /= 255.
+        for channel in range(3):
+            x[..., channel] = (x[..., channel] - self.mean[channel]) / self.std[channel]
+        return x
+
+
+
+

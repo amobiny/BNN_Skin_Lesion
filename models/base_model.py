@@ -1,7 +1,7 @@
 import tensorflow as tf
 from tqdm import tqdm
 from utils.augmentation_utils import tf_aug
-from utils.eval_utils import save_confusion_matrix
+from utils.eval_utils import save_confusion_matrix, predictive_entropy, mutual_info
 from utils.loss_utils import cross_entropy, weighted_cross_entropy
 import os
 import numpy as np
@@ -150,8 +150,9 @@ class BaseModel(object):
             print('wrong data name')
 
         self.data_reader = DataLoader(self.conf)
-        self.numTest = self.data_reader.count_num_samples(mode='test')
-        self.num_test_batch = int(self.numTest / self.conf.val_batch_size)
+        self.data_reader.get_data(mode='test')
+        self.num_test_batch = self.data_reader.count_num_batch(self.conf.val_batch_size, mode='test')
+
 
         print('-' * 25 + 'Test' + '-' * 25)
         if not self.conf.bayes:
@@ -220,40 +221,30 @@ class BaseModel(object):
     def MC_evaluate(self, dataset='valid', train_step=None):
         num_batch = self.num_test_batch if dataset == 'test' else self.num_val_batch
         self.sess.run(tf.local_variables_initializer())
+
         y_pred = np.zeros((self.conf.monte_carlo_simulations, self.conf.val_batch_size, self.conf.num_cls))
+        mean_pred, var_pred = np.zeros_like(self.data_reader.y_test), np.zeros_like(self.data_reader.y_test[:, 0])
+        err = 0.
+
         for step in tqdm(range(num_batch)):
             start = self.conf.val_batch_size * step
             end = self.conf.val_batch_size * (step + 1)
             data_x, data_y = self.data_reader.next_batch(start=start, end=end, mode=dataset)
             feed_dict = {self.inputs_pl: data_x,
                          self.labels_pl: data_y,
-                         self.keep_prob_pl: 1,
+                         self.keep_prob_pl: self.conf.keep_prob,
                          self.is_train_pl: False}
             for sample_id in range(self.conf.monte_carlo_simulations):
                 # save predictions from a sample pass
-                y_pred[sample_id] = self.sess.run(y_prob, feed_dict=feed_dict)
+                y_pred[sample_id] = self.sess.run(self.y_prob, feed_dict=feed_dict)
 
             # average and variance over all passes
             mean_pred[start:end] = y_pred.mean(axis=0)
             var_pred[start: end] = predictive_entropy(mean_pred[start:end])
+            var_pred[start: end] = mutual_info(y_pred)
 
             # compute batch error
-            err += np.count_nonzero(np.not_equal(mean_pred[start:end].argmax(axis=1),
-                                                 y_batch.argmax(axis=1)))
+            err += np.count_nonzero(np.not_equal(mean_pred[start:end].argmax(axis=1), data_y.argmax(axis=1)))
 
-            mask_pred_mc = [np.zeros((self.conf.val_batch_size, self.conf.height, self.conf.width))
-                            for _ in range(self.conf.monte_carlo_simulations)]
-            mask_prob_mc = [np.zeros((self.conf.val_batch_size, self.conf.height, self.conf.width, self.conf.num_cls))
-                            for _ in range(self.conf.monte_carlo_simulations)]
-            feed_dict = {self.inputs_pl: data_x,
-                         self.labels_pl: data_y,
-                         self.is_training_pl: True,
-                         self.with_dropout_pl: True,
-                         self.keep_prob_pl: self.conf.keep_prob}
-            for mc_iter in range(self.conf.monte_carlo_simulations):
-                inputs, mask, mask_prob, mask_pred = self.sess.run([self.inputs_pl,
-                                                                    self.labels_pl,
-                                                                    self.y_prob,
-                                                                    self.y_pred], feed_dict=feed_dict)
-                mask_prob_mc[mc_iter] = mask_prob
-                mask_pred_mc[mc_iter] = mask_pred
+        accuracy = 1 - err / self.data_reader.y_test.shape[0]
+        print('Test accuracy = {0:.02%}'.format(accuracy))

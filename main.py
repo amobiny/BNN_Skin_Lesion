@@ -9,7 +9,7 @@ elif args.model == 'densenet':
     from models.densenet import DenseNet as Model
 
 if __name__ == '__main__':
-    os.environ['CUDA_VISIBLE_DEVICES'] = '1, 3'
+    os.environ['CUDA_VISIBLE_DEVICES'] = '3'
     model = Model(tf.Session(), args)
     if not os.path.exists(args.modeldir + args.run_name):
         os.makedirs(args.modeldir + args.run_name)

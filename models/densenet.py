@@ -44,12 +44,12 @@ class DenseNet(BaseModel):
             x = batch_normalization(x, training=self.is_train_pl, scope='BN1')
             x = relu(x)
             x = conv_layer(x, num_filters=4 * self.k, kernel_size=1, layer_name='CONV1')
-            x = drop_out(x, self.conf.keep_prob_pl)
+            x = drop_out(x, self.keep_prob_pl)
 
             x = batch_normalization(x, training=self.is_train_pl, scope='BN2')
             x = relu(x)
             x = conv_layer(x, num_filters=self.k, kernel_size=3, layer_name='CONV2')
-            x = drop_out(x, self.conf.keep_prob_pl)
+            x = drop_out(x, self.keep_prob_pl)
             return x
 
     def transition_layer(self, x, scope):
@@ -58,7 +58,7 @@ class DenseNet(BaseModel):
             x = relu(x)
             x = conv_layer(x, num_filters=int(x.get_shape().as_list()[-1]*self.conf.theta),
                            kernel_size=1, layer_name='CONV')
-            x = drop_out(x, self.conf.keep_prob_pl)
+            x = drop_out(x, self.keep_prob_pl)
             x = average_pool(x, pool_size=2, stride=2, name='AVG_POOL')
             return x
 

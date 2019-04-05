@@ -56,3 +56,27 @@ def save_confusion_matrix(y_true, y_pred, classes, dest_path,
                     color="white" if cm[i, j] > thresh else "black")
     fig.tight_layout()
     plt.savefig(dest_path)
+
+
+def predictive_entropy(prob):
+    """
+    Entropy of the probabilities (to measure the epistemic uncertainty)
+    :param prob: probabilities of shape [batch_size, C]
+    :return: Entropy of shape [batch_size]
+    """
+    eps = 1e-5
+    return -1 * np.sum(np.log(prob+eps) * prob, axis=1)
+
+
+def mutual_info(mc_prob):
+    """
+    computes the mutual information
+    :param mc_prob: List MC probabilities of length mc_simulations;
+                    each of shape  of shape [batch_size, num_cls]
+    :return: mutual information of shape [batch_size, num_cls]
+    """
+    eps = 1e-5
+    mean_prob = mc_prob.mean(axis=0)
+    first_term = -1 * np.sum(mean_prob * np.log(mean_prob + eps), axis=1)
+    second_term = np.sum(np.mean([prob * np.log(prob + eps) for prob in mc_prob], axis=0), axis=1)
+    return first_term + second_term
